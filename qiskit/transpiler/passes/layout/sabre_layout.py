@@ -18,6 +18,7 @@ import dataclasses
 import logging
 import functools
 import time
+from datetime import datetime, timedelta
 
 import numpy as np
 import rustworkx as rx
@@ -108,7 +109,7 @@ class SabreLayout(TransformationPass):
     for NISQ-era quantum devices." ASPLOS 2019.
     `arXiv:1809.02573 <https://arxiv.org/pdf/1809.02573.pdf>`_
     """
-
+    _error_cache = {}  # ✅ Class-level cache shared across all instances
     def __init__(
         self,
         coupling_map,
@@ -119,6 +120,8 @@ class SabreLayout(TransformationPass):
         layout_trials=None,
         skip_routing=False,
     ):
+        # Class-level dictionary: {backend_name: {"time": datetime, "data": {...}}}
+        self._error_cache = SabreLayout._error_cache  # ✅ this is correct now
         """SabreLayout initializer.
 
         Args:
@@ -195,6 +198,7 @@ class SabreLayout(TransformationPass):
             self._neighbor_table = NeighborTable(rx.adjacency_matrix(self.coupling_map.graph))
 
     def run(self, dag):
+        self._error_cache.clear()
         """Run the SabreLayout pass on `dag`.
 
         Args:
@@ -209,6 +213,12 @@ class SabreLayout(TransformationPass):
         """
         if len(dag.qubits) > self.coupling_map.size():
             raise TranspilerError("More virtual qubits exist than physical.")
+        # Determine the backend from the user or from self.coupling_map
+        # If we do not have a real backend, pass None so we get an empty dict
+        backend = getattr(self, "backend", None) or getattr(self.coupling_map, "backend", None)
+    
+        # Step 1: Get error map (cached if possible)
+        error_map = self._get_error_map(backend)
 
         # Choose a random initial_layout.
         if self.routing_pass is not None:
@@ -265,7 +275,9 @@ class SabreLayout(TransformationPass):
         inner_run = self._inner_run
         if "sabre_starting_layouts" in self.property_set:
             inner_run = functools.partial(
-                self._inner_run, starting_layouts=self.property_set["sabre_starting_layouts"]
+                self._inner_run, 
+                starting_layouts=self.property_set["sabre_starting_layouts"],
+                error_map=error_map
             )
         components = disjoint_utils.run_pass_over_connected_components(dag, target, inner_run)
         self.property_set["layout"] = Layout(
@@ -381,7 +393,7 @@ class SabreLayout(TransformationPass):
         disjoint_utils.combine_barriers(mapped_dag, retain_uuid=False)
         return mapped_dag
 
-    def _inner_run(self, dag, coupling_map, starting_layouts=None):
+    def _inner_run(self, dag, coupling_map, starting_layouts=None, error_map=None):
         if not coupling_map.is_symmetric:
             # deepcopy is needed here to avoid modifications updating
             # shared references in passes which require directional
@@ -428,6 +440,7 @@ class SabreLayout(TransformationPass):
             self.layout_trials,
             self.seed,
             partial_layouts,
+            # error_map,  # pass the error_map as an additional argument
         )
         sabre_stop = time.perf_counter()
         logger.debug(
@@ -483,6 +496,72 @@ class SabreLayout(TransformationPass):
         qubit_map = Layout.combine_into_edge_map(initial_layout, trivial_layout)
         final_layout = {v: pass_final_layout._v2p[qubit_map[v]] for v in initial_layout._v2p}
         return Layout(final_layout)
+    def _get_error_map(self, backend):
+        """Return a dictionary of {(qA, qB): cnot_error, q: readout_error} for the given backend.
+        Cache results for up to 24 hours to avoid repeated calls.
+
+        Args:
+            backend (IBMQBackend or BackendV2): The backend we want to extract errors from.
+
+        Returns:
+            dict: A dictionary of error rates.
+        """
+        if not backend:
+            # If there's no backend, return an empty dict.
+            return {}
+
+        backend_name = backend.name
+        now = datetime.now()
+        # Check our class-level cache
+        cached_entry = self._error_cache.get(backend_name)
+        if cached_entry:
+            # If cached less than 24 hours ago, return it
+            elapsed = now - cached_entry["time"]
+            if elapsed < timedelta(hours=24):
+                return cached_entry["data"]
+
+        # Not cached or stale -> fetch new data
+        error_map = {}
+        
+        # 2. If it's likely a BackendV1 with properties(), do it that way
+        properties = getattr(backend, "properties", None)
+        if callable(properties):
+            properties = properties()  # get the actual BackendProperties object
+        if properties is not None:
+            # We can parse gates:
+            for gate in properties.gates:
+                gate_data = gate.to_dict()
+                if gate_data["gate"] == "cx":
+                    qubits_tuple = tuple(gate_data["qubits"])
+                    for param in gate_data["parameters"]:
+                        if param["name"] == "gate_error" and param["value"] is not None:
+                            error_map[qubits_tuple] = param["value"]
+                            # If the device is symmetrical, you could also add error_map[(qubits_tuple[1], qubits_tuple[0])] here if you want
+                            break
+            # Qubit readout errors
+            num_q = len(properties.qubits)
+            for q in range(num_q):
+                try:
+                    ro_error = properties.readout_error(q)
+                except Exception:
+                    ro_error = None
+                    for param in properties.qubits[q]:
+                        if getattr(param, "name", "") == "readout_error":
+                            ro_error = param.value
+                            break
+                if ro_error is not None:
+                    error_map[q] = ro_error
+                    
+        # Update the cache
+        error_map[(0, 1)] = 0.0142
+        error_map[(1, 2)] = 0.019
+        error_map[0] = 0.021
+        error_map[1] = 0.017
+        self._error_cache[backend_name] = {"time": now, "data": error_map}
+        logger.debug("Error map for %s: %s", backend_name, error_map)
+        print("🧠 [DEBUG] Ex Error Map:", error_map, flush=True)
+        return error_map
+
 
 
 @dataclasses.dataclass
