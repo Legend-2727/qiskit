@@ -288,7 +288,40 @@ fn compute_dense_starting_layout(
     target: &RoutingTargetView,
     run_in_parallel: bool,
 ) -> Vec<Option<u32>> {
+    // Original: use the distance matrix from the coupling map.
     let mut adj_matrix = target.distance.to_owned();
+
+    // NEW: If error data is available, use error-weighted distances and readout errors.
+    if target.neighbors.has_error_data() {
+        // Collect readout errors for all physical qubits.
+        let readout_errors: Vec<f64> = (0..target.neighbors.num_qubits())
+            .map(|q| target.neighbors.get_readout_error(q))
+            .collect();
+
+        // Sort physical qubits by ascending readout error.
+        let mut physical_qubits: Vec<usize> = (0..target.neighbors.num_qubits()).collect();
+        physical_qubits.sort_by(|&a, &b| {
+            readout_errors[a]
+                .partial_cmp(&readout_errors[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // NEW: Create an initial layout that prioritizes physical qubits with lower readout error.
+        // This is a placeholder for your advanced assignment algorithm.
+        let mut layout = vec![None; num_qubits];
+        // Example strategy: assign logical qubits in order to the sorted physical qubits.
+        // (You may need to incorporate connectivity heuristics here as well.)
+        for i in 0..num_qubits.min(physical_qubits.len()) {
+            layout[i] = Some(physical_qubits[i] as u32);
+        }
+        // Additional comments:
+        // - Here you could further refine the assignment based on connectivity using
+        //   target.neighbors.get_error_distance(...)
+        // - This is the section to integrate your CAES-specific logic for layout selection.
+        return layout;
+    }
+
+    // Fallback: if no error data, use the original hop-count based assignment.
     if run_in_parallel {
         adj_matrix.par_mapv_inplace(|x| if x == 1. { 1. } else { 0. });
     } else {
@@ -305,3 +338,4 @@ fn compute_dense_starting_layout(
     );
     map.into_iter().map(|x| Some(x as u32)).collect()
 }
+

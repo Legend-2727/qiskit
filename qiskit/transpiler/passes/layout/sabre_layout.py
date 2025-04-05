@@ -272,6 +272,9 @@ class SabreLayout(TransformationPass):
             target.make_symmetric()
         else:
             target = self.coupling_map
+        # Get error map from backend
+        backend = getattr(self, "backend", None) or getattr(self.coupling_map, "backend", None)
+        error_map = self._get_error_map(backend)
         inner_run = self._inner_run
         if "sabre_starting_layouts" in self.property_set:
             inner_run = functools.partial(
@@ -440,7 +443,7 @@ class SabreLayout(TransformationPass):
             self.layout_trials,
             self.seed,
             partial_layouts,
-            # error_map,  # pass the error_map as an additional argument
+            error_map,  # pass the error_map as an additional argument
         )
         sabre_stop = time.perf_counter()
         logger.debug(
@@ -518,48 +521,50 @@ class SabreLayout(TransformationPass):
             # If cached less than 24 hours ago, return it
             elapsed = now - cached_entry["time"]
             if elapsed < timedelta(hours=24):
+                logger.debug("Using cached error map for %s", backend_name)
                 return cached_entry["data"]
 
         # Not cached or stale -> fetch new data
+        logger.debug("Extracting error map for %s", backend_name)
         error_map = {}
-        
-        # 2. If it's likely a BackendV1 with properties(), do it that way
-        properties = getattr(backend, "properties", None)
-        if callable(properties):
-            properties = properties()  # get the actual BackendProperties object
-        if properties is not None:
-            # We can parse gates:
-            for gate in properties.gates:
-                gate_data = gate.to_dict()
-                if gate_data["gate"] == "cx":
-                    qubits_tuple = tuple(gate_data["qubits"])
-                    for param in gate_data["parameters"]:
-                        if param["name"] == "gate_error" and param["value"] is not None:
-                            error_map[qubits_tuple] = param["value"]
-                            # If the device is symmetrical, you could also add error_map[(qubits_tuple[1], qubits_tuple[0])] here if you want
-                            break
-            # Qubit readout errors
-            num_q = len(properties.qubits)
-            for q in range(num_q):
-                try:
-                    ro_error = properties.readout_error(q)
-                except Exception:
-                    ro_error = None
-                    for param in properties.qubits[q]:
-                        if getattr(param, "name", "") == "readout_error":
-                            ro_error = param.value
-                            break
-                if ro_error is not None:
-                    error_map[q] = ro_error
-                    
+        try:
+            # Try to get properties from the backend
+            properties = getattr(backend, "properties", None)
+            if callable(properties):
+                properties = properties()  # get the actual BackendProperties object
+            
+            if properties is not None:
+                # Extract CNOT gate errors
+                for gate in properties.gates:
+                    gate_data = gate.to_dict()
+                    if gate_data["gate"] == "cx":
+                        qubits_tuple = tuple(gate_data["qubits"])
+                        for param in gate_data["parameters"]:
+                            if param["name"] == "gate_error" and param["value"] is not None:
+                                error_map[qubits_tuple] = param["value"]
+                                break
+                            
+                # Extract qubit readout errors
+                num_q = len(properties.qubits)
+                for q in range(num_q):
+                    try:
+                        ro_error = properties.readout_error(q)
+                    except Exception:
+                        ro_error = None
+                        for param in properties.qubits[q]:
+                            if getattr(param, "name", "") == "readout_error":
+                                ro_error = param.value
+                                break
+                            
+                    if ro_error is not None:
+                        error_map[q] = ro_error
+        except Exception as e:
+            logger.warning("Error extracting error rates from backend: %s", str(e))
+    
         # Update the cache
-        error_map[(0, 1)] = 0.0142
-        error_map[(1, 2)] = 0.019
-        error_map[0] = 0.021
-        error_map[1] = 0.017
+        
         self._error_cache[backend_name] = {"time": now, "data": error_map}
-        logger.debug("Error map for %s: %s", backend_name, error_map)
-        print("🧠 [DEBUG] Ex Error Map:", error_map, flush=True)
+        logger.debug("Extracted error map with %d entries", len(error_map))
         return error_map
 
 
