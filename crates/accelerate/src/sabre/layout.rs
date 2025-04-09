@@ -288,7 +288,7 @@ fn compute_dense_starting_layout(
     target: &RoutingTargetView,
     run_in_parallel: bool,
 ) -> Vec<Option<u32>> {
-    // Original: use the distance matrix from the coupling map.
+    // Copy the distance matrix from the coupling map.
     let mut adj_matrix = target.distance.to_owned();
 
     // NEW: If error data is available, use error-weighted distances and readout errors.
@@ -298,36 +298,69 @@ fn compute_dense_starting_layout(
             .map(|q| target.neighbors.get_readout_error(q))
             .collect();
 
-        // Sort physical qubits by ascending readout error.
-        let mut physical_qubits: Vec<usize> = (0..target.neighbors.num_qubits()).collect();
-        physical_qubits.sort_by(|&a, &b| {
+        // Parameter to weight connectivity cost relative to the readout error.
+        let lambda = 1.0;
+
+        let n_physical = target.neighbors.num_qubits();
+        // Initialize the layout vector for logical qubits (each element will eventually hold a physical qubit index).
+        let mut layout = vec![None; num_qubits];
+
+        // Create a vector of all physical qubit indices.
+        let mut unassigned: Vec<usize> = (0..n_physical).collect();
+        // This vector stores the chosen physical qubits.
+        let mut assigned: Vec<usize> = Vec::new();
+
+        // Step 1: Choose the first physical qubit.
+        // Sort unassigned by ascending readout error.
+        unassigned.sort_by(|&a, &b| {
             readout_errors[a]
                 .partial_cmp(&readout_errors[b])
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-
-        // NEW: Create an initial layout that prioritizes physical qubits with lower readout error.
-        // This is a placeholder for your advanced assignment algorithm.
-        let mut layout = vec![None; num_qubits];
-        // Example strategy: assign logical qubits in order to the sorted physical qubits.
-        // (You may need to incorporate connectivity heuristics here as well.)
-        for i in 0..num_qubits.min(physical_qubits.len()) {
-            layout[i] = Some(physical_qubits[i] as u32);
+        if let Some(&first) = unassigned.first() {
+            layout[0] = Some(first as u32);
+            assigned.push(first);
+            unassigned.retain(|&q| q != first);
         }
-        // Additional comments:
-        // - Here you could further refine the assignment based on connectivity using
-        //   target.neighbors.get_error_distance(...)
-        // - This is the section to integrate your CAES-specific logic for layout selection.
+
+        // Step 2: Iteratively assign the remaining logical qubits.
+        for i in 1..num_qubits {
+            if unassigned.is_empty() {
+                break;
+            }
+            // For each candidate physical qubit still unassigned, compute cost:
+            // cost = readout error of candidate + lambda * (sum of error distances to all assigned qubits)
+            let (best_candidate, _best_cost) = unassigned
+                .iter()
+                .map(|&candidate| {
+                    let connectivity_cost: f64 = assigned
+                        .iter()
+                        .map(|&assigned_q| target.neighbors.get_error_distance(candidate, assigned_q))
+                        .sum();
+                    let total_cost = readout_errors[candidate] + lambda * connectivity_cost;
+                    (candidate, total_cost)
+                })
+                .min_by(|&(_, cost_a), &(_, cost_b)| {
+                    cost_a
+                        .partial_cmp(&cost_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap();
+            // Assign the best candidate to this logical qubit.
+            layout[i] = Some(best_candidate as u32);
+            assigned.push(best_candidate);
+            unassigned.retain(|&q| q != best_candidate);
+        }
         return layout;
     }
 
     // Fallback: if no error data, use the original hop-count based assignment.
     if run_in_parallel {
-        adj_matrix.par_mapv_inplace(|x| if x == 1. { 1. } else { 0. });
+        adj_matrix.par_mapv_inplace(|x| if x == 1.0 { 1.0 } else { 0.0 });
     } else {
-        adj_matrix.mapv_inplace(|x| if x == 1. { 1. } else { 0. });
+        adj_matrix.mapv_inplace(|x| if x == 1.0 { 1.0 } else { 0.0 });
     }
-    let [_rows, _cols, map] = best_subset_inner(
+    let [rows, cols, map] = best_subset_inner(
         num_qubits,
         adj_matrix.view(),
         0,
@@ -338,4 +371,3 @@ fn compute_dense_starting_layout(
     );
     map.into_iter().map(|x| Some(x as u32)).collect()
 }
-

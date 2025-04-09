@@ -199,7 +199,7 @@ impl NeighborTable {
 
     /// Example: check if we have error data
     #[getter]
-    fn has_error_data(&self) -> bool {
+    pub fn has_error_data(&self) -> bool {
         self.weights.is_some() && self.distances.is_some() && self.readout_errors.is_some()
     }
 
