@@ -185,6 +185,26 @@ pub struct Heuristic {
     pub attempt_limit: usize,
 }
 
+impl Heuristic {
+    // New helper method to compute the readout error penalty for a swap.
+    pub fn evaluate_readout_penalty(
+        &self, 
+        swap: [crate::nlayout::PhysicalQubit; 2], 
+        target: &super::route::RoutingTargetView
+    ) -> f64 {
+        // Define a constant for the readout penalty weight.
+        // You can later experiment with different values.
+        const READOUT_PENALTY_WEIGHT: f64 = 1.0;
+        let p = swap[0];
+        let q = swap[1];
+        // Retrieve readout errors using the neighbor table's getter.
+        let error_p = target.neighbors.get_readout_error(p.index());
+        let error_q = target.neighbors.get_readout_error(q.index());
+        READOUT_PENALTY_WEIGHT * (error_p + error_q)
+    }
+}
+
+
 #[pymethods]
 impl Heuristic {
     /// Construct a new Sabre heuristic.  This can either be made directly of the desired

@@ -408,6 +408,13 @@ impl RoutingState<'_, '_> {
                 *score += weight * self.extended_set.score(*swap, dist);
             }
         }
+        
+        // **NEW READOUT PENALTY:**
+        for (swap, score) in self.swap_scores.iter_mut() {
+            // Call your new helper method from Heuristic to add a penalty based on readout errors.
+            let readout_penalty = self.heuristic.evaluate_readout_penalty(*swap, self.target);
+            *score += readout_penalty;
+        }
 
         if let Some(DecayHeuristic { .. }) = self.heuristic.decay {
             for (swap, score) in self.swap_scores.iter_mut() {
@@ -460,7 +467,7 @@ pub fn sabre_routing(
         distance: distance_matrix.as_array(),
     };
     let (res, final_layout) = swap_map(
-        &target,
+        target,
         dag,
         heuristic,
         initial_layout,
@@ -488,7 +495,7 @@ pub fn sabre_routing(
 /// Run (potentially in parallel) several trials of the Sabre routing algorithm on the given
 /// problem and return the one with fewest swaps.
 pub fn swap_map(
-    target: &RoutingTargetView,
+    target: RoutingTargetView,
     dag: &SabreDAG,
     heuristic: &Heuristic,
     initial_layout: &NLayout,

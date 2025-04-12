@@ -403,7 +403,7 @@ class SabreLayout(TransformationPass):
             # constraints
             coupling_map = copy.deepcopy(coupling_map)
             coupling_map.make_symmetric()
-        neighbor_table = NeighborTable(rx.adjacency_matrix(coupling_map.graph))
+        neighbor_table = NeighborTable(rx.adjacency_matrix(coupling_map.graph),error_map)
         dist_matrix = coupling_map.distance_matrix
         original_qubit_indices = {bit: index for index, bit in enumerate(dag.qubits)}
         partial_layouts = []
