@@ -200,7 +200,17 @@ impl Heuristic {
         // Retrieve readout errors using the neighbor table's getter.
         let error_p = target.neighbors.get_readout_error(p.index());
         let error_q = target.neighbors.get_readout_error(q.index());
-        READOUT_PENALTY_WEIGHT * (error_p + error_q)
+        println!(
+            "[Heuristic::evaluate_readout_penalty] swap = {:?}, readout errors => p: {}, q: {}",
+            swap,
+            error_p,
+            error_q
+        );
+        
+        let penalty = READOUT_PENALTY_WEIGHT * (error_p + error_q);
+        println!("[Heuristic::evaluate_readout_penalty] readout penalty: {}", penalty);
+
+        penalty
     }
 }
 

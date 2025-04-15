@@ -119,6 +119,7 @@ pub fn sabre(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<heuristic::LookaheadHeuristic>()?;
     m.add_class::<heuristic::DecayHeuristic>()?;
     m.add_class::<NeighborTable>()?;
+    m.add_class::<neighbor_table::NeighborTable>()?;
     m.add_class::<SabreDAG>()?;
     m.add_class::<SwapMap>()?;
     m.add_class::<BlockResult>()?;

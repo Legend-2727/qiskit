@@ -92,7 +92,7 @@ impl std::ops::Index<PhysicalQubit> for NeighborTable {
 impl NeighborTable {
     /// Construct a new neighbor table from adjacency_matrix, plus optional error map.
     #[new]
-    #[pyo3(signature = (adjacency_matrix=None, error_map=None))]
+    #[pyo3(signature = (adjacency_matrix, error_map=None))]
     pub fn new(
         adjacency_matrix: Option<PyReadonlyArray2<f64>>,
         error_map: Option<Py<PyAny>>, // or Option<Bound<'_, PyAny>>
@@ -108,7 +108,7 @@ impl NeighborTable {
                 // mat.axis_iter(Axis(0))
                 rows.into_par_iter()
                     .enumerate()
-                    .map(|(row_i, row)| {
+                    .map(|(_row_i, row)| {
                         let mut list = SmallVec::<[PhysicalQubit; 4]>::new();
                         for (col_i, &val) in row.iter().enumerate() {
                             if val != 0.0 {
@@ -141,6 +141,7 @@ impl NeighborTable {
         let mut readout_errors: Option<Vec<f64>> = None;
 
         if let Some(pyobj) = error_map {
+            println!("[NeighborTable] Received error_map from Python!");
             // Prepare local variables
             let n = neighbors.len();
             let mut w = Array2::<f64>::from_elem((n, n), 1.0);
@@ -154,6 +155,7 @@ impl NeighborTable {
                 let dict: Bound<'_, PyDict> = bound_any.downcast_into::<PyDict>()?;
                 // Parse edges or readout errors
                 for (k, v) in dict.iter() {
+                    println!("[NeighborTable] Parsing key: {:?}, value: {:?}", k, v);
                     if let Ok((q1, q2)) = k.extract::<(usize, usize)>() {
                         // two-qubit error
                         let errval = v.extract::<f64>()?;
@@ -169,6 +171,7 @@ impl NeighborTable {
                         }
                     }
                 }
+                println!("[NeighborTable] Done parsing error_map. w = {:?}, d = {:?}, r = {:?}", w, d, r);
                 Ok(())
             })?;
 
@@ -183,10 +186,12 @@ impl NeighborTable {
                     }
                 }
             }
-
+            println!("[NeighborTable] Floyd–Warshall complete: distances = {:?}", d);
+            println!("[NeighborTable] readout_errors = {:?}", r);
             weights = Some(w);
             distances = Some(d);
             readout_errors = Some(r);
+
         }
 
         Ok(Self {

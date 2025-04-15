@@ -46,6 +46,7 @@ const SWAP_EPILOGUE_TRIALS: usize = 4;
 /// within it; cloning only duplicates the inner references and not the data objects beneath.  This
 /// struct doesn't own its data because it's typically a view onto data generated from Python, and
 /// we want to avoid copies.
+#[derive(Clone)]
 pub struct RoutingTargetView<'a> {
     pub neighbors: &'a NeighborTable,
     pub coupling: &'a DiGraph<(), ()>,
@@ -414,6 +415,12 @@ impl RoutingState<'_, '_> {
             // Call your new helper method from Heuristic to add a penalty based on readout errors.
             let readout_penalty = self.heuristic.evaluate_readout_penalty(*swap, self.target);
             *score += readout_penalty;
+            println!(
+                "[route.rs::choose_best_swap] swap: {:?}, readout_penalty: {}, updated_score: {}",
+                swap,
+                readout_penalty,
+                *score
+            );
         }
 
         if let Some(DecayHeuristic { .. }) = self.heuristic.decay {
@@ -434,6 +441,11 @@ impl RoutingState<'_, '_> {
                 self.best_swaps.push(swap);
             }
         }
+        println!(
+            "[route.rs::choose_best_swap] best_swaps = {:?}, min_score = {}",
+            self.best_swaps,
+            min_score
+        );
         *self.best_swaps.choose(&mut self.rng).unwrap()
     }
 }
@@ -522,7 +534,7 @@ pub fn swap_map(
             .map(|(index, seed_trial)| {
                 (
                     index,
-                    swap_map_trial(target, dag, heuristic, initial_layout, seed_trial),
+                    swap_map_trial(&target, dag, heuristic, initial_layout, seed_trial),
                 )
             })
             .min_by_key(|(index, (result, _))| {
@@ -536,7 +548,7 @@ pub fn swap_map(
     } else {
         seed_vec
             .into_iter()
-            .map(|seed_trial| swap_map_trial(target, dag, heuristic, initial_layout, seed_trial))
+            .map(|seed_trial| swap_map_trial(&target, dag, heuristic, initial_layout, seed_trial))
             .min_by_key(|(result, _)| result.map.map.values().map(|x| x.len()).sum::<usize>())
             .unwrap()
     }

@@ -34,7 +34,7 @@ use super::{NodeBlockResults, SabreResult};
 use crate::dense_layout::best_subset_inner;
 
 #[pyfunction]
-#[pyo3(signature = (dag, neighbor_table, distance_matrix, heuristic, max_iterations, num_swap_trials, num_random_trials, seed=None, partial_layouts=vec![]))]
+#[pyo3(signature = (dag, neighbor_table, distance_matrix, heuristic, max_iterations, num_swap_trials, num_random_trials, seed=None, partial_layouts=vec![], error_map=None))]
 pub fn sabre_layout_and_routing(
     py: Python,
     dag: &SabreDAG,
@@ -46,7 +46,9 @@ pub fn sabre_layout_and_routing(
     num_random_trials: usize,
     seed: Option<u64>,
     mut partial_layouts: Vec<Vec<Option<u32>>>,
+    error_map: Option<Py<PyAny>>,
 ) -> (NLayout, PyObject, (SwapMap, PyObject, NodeBlockResults)) {
+    println!("[layout.rs] sabre_layout_and_routing called. Error map is None? => {}", error_map.is_none());
     let run_in_parallel = getenv_use_multiple_threads();
     let target = RoutingTargetView {
         neighbors: neighbor_table,
@@ -262,13 +264,13 @@ fn layout_trial(
     for _iter in 0..max_iterations {
         for dag in [&dag_no_control_forward, &dag_no_control_reverse] {
             let (_result, final_layout) =
-                swap_map_trial(target, dag, heuristic, &initial_layout, routing_seed);
+                swap_map_trial(&target, dag, heuristic, &initial_layout, routing_seed);
             initial_layout = final_layout;
         }
     }
 
     let (sabre_result, final_layout) = swap_map(
-        target,
+        target.clone(),
         dag,
         heuristic,
         &initial_layout,
@@ -360,7 +362,7 @@ fn compute_dense_starting_layout(
     } else {
         adj_matrix.mapv_inplace(|x| if x == 1.0 { 1.0 } else { 0.0 });
     }
-    let [rows, cols, map] = best_subset_inner(
+    let [_rows, _cols, map] = best_subset_inner(
         num_qubits,
         adj_matrix.view(),
         0,

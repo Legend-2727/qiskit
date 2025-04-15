@@ -198,7 +198,6 @@ class SabreLayout(TransformationPass):
             self._neighbor_table = NeighborTable(rx.adjacency_matrix(self.coupling_map.graph))
 
     def run(self, dag):
-        self._error_cache.clear()
         """Run the SabreLayout pass on `dag`.
 
         Args:
@@ -219,6 +218,7 @@ class SabreLayout(TransformationPass):
     
         # Step 1: Get error map (cached if possible)
         error_map = self._get_error_map(backend)
+        print(f"[SabreLayout] Python-side error_map extracted: {error_map}")
 
         # Choose a random initial_layout.
         if self.routing_pass is not None:
@@ -275,12 +275,11 @@ class SabreLayout(TransformationPass):
         # Get error map from backend
         backend = getattr(self, "backend", None) or getattr(self.coupling_map, "backend", None)
         error_map = self._get_error_map(backend)
-        inner_run = self._inner_run
+        inner_run = functools.partial(self._inner_run, error_map=error_map)
         if "sabre_starting_layouts" in self.property_set:
             inner_run = functools.partial(
                 self._inner_run, 
-                starting_layouts=self.property_set["sabre_starting_layouts"],
-                error_map=error_map
+                starting_layouts=self.property_set["sabre_starting_layouts"]
             )
         components = disjoint_utils.run_pass_over_connected_components(dag, target, inner_run)
         self.property_set["layout"] = Layout(
@@ -403,7 +402,10 @@ class SabreLayout(TransformationPass):
             # constraints
             coupling_map = copy.deepcopy(coupling_map)
             coupling_map.make_symmetric()
-        neighbor_table = NeighborTable(rx.adjacency_matrix(coupling_map.graph),error_map)
+        logger.debug("Dummy error map: %s", error_map)
+        neighbor_table = NeighborTable(rx.adjacency_matrix(coupling_map.graph), error_map=error_map)
+        print(f"[SabreLayout] Passing error_map to NeighborTable constructor: {error_map}")
+
         dist_matrix = coupling_map.distance_matrix
         original_qubit_indices = {bit: index for index, bit in enumerate(dag.qubits)}
         partial_layouts = []
@@ -433,6 +435,7 @@ class SabreLayout(TransformationPass):
             .with_decay(0.001, 5)
         )
         sabre_start = time.perf_counter()
+        print(f"[SabreLayout] Passing error_map to sabre_layout_and_routing: {error_map}")
         (initial_layout, final_permutation, sabre_result) = sabre_layout_and_routing(
             sabre_dag,
             neighbor_table,
@@ -499,19 +502,30 @@ class SabreLayout(TransformationPass):
         qubit_map = Layout.combine_into_edge_map(initial_layout, trivial_layout)
         final_layout = {v: pass_final_layout._v2p[qubit_map[v]] for v in initial_layout._v2p}
         return Layout(final_layout)
+    
     def _get_error_map(self, backend):
         """Return a dictionary of {(qA, qB): cnot_error, q: readout_error} for the given backend.
         Cache results for up to 24 hours to avoid repeated calls.
-
-        Args:
-            backend (IBMQBackend or BackendV2): The backend we want to extract errors from.
-
-        Returns:
-            dict: A dictionary of error rates.
         """
         if not backend:
             # If there's no backend, return an empty dict.
             return {}
+
+        # If the backend is a fake backend, use dummy constant error rates.
+        if backend.name.lower().startswith("fake"):
+            dummy_error_map = {
+                (0, 1): 0.01,
+                (1, 2): 0.02,
+                (2, 3): 0.03,
+                # Add more gate error pairs as needed
+                0: 0.005,  # readout error for qubit 0
+                1: 0.005,  # readout error for qubit 1
+                2: 0.005,  # readout error for qubit 2
+                3: 0.005,  # readout error for qubit 3
+                4: 0.005   # readout error for qubit 4
+            }
+            logger.debug("Using dummy error rates: %s", dummy_error_map)
+            return dummy_error_map
 
         backend_name = backend.name
         now = datetime.now()
@@ -543,7 +557,6 @@ class SabreLayout(TransformationPass):
                             if param["name"] == "gate_error" and param["value"] is not None:
                                 error_map[qubits_tuple] = param["value"]
                                 break
-                            
                 # Extract qubit readout errors
                 num_q = len(properties.qubits)
                 for q in range(num_q):
@@ -555,17 +568,18 @@ class SabreLayout(TransformationPass):
                             if getattr(param, "name", "") == "readout_error":
                                 ro_error = param.value
                                 break
-                            
                     if ro_error is not None:
                         error_map[q] = ro_error
         except Exception as e:
             logger.warning("Error extracting error rates from backend: %s", str(e))
     
+        # Log the final extracted error map.
+        logger.debug("Extracted error map with %d entries: %s", len(error_map), error_map)
+    
         # Update the cache
-        
         self._error_cache[backend_name] = {"time": now, "data": error_map}
-        logger.debug("Extracted error map with %d entries", len(error_map))
         return error_map
+
 
 
 
