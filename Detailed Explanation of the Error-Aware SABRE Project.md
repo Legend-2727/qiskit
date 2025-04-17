@@ -58,11 +58,11 @@ This document explains precisely **what** is being done to enhance SABRE with ha
 
 **Passing to Rust**:
 ```
-  neighbor\_table \= NeighborTable(
+  neighbor_table = NeighborTable(
 
-    rx.adjacency\_matrix(coupling\_map.graph),
+    rx.adjacency_matrix(coupling_map.graph),
 
-    error\_map=error\_map
+    error_map=error_map
 
 )
 ```
@@ -72,19 +72,19 @@ This document explains precisely **what** is being done to enhance SABRE with ha
 **Heuristic & Layout**:
 
   ```
-(initial\_layout, final\_permutation, sabre\_result) \= sabre\_layout\_and\_routing(
+(initial_layout, final_permutation, sabre_result) = sabre_layout_and_routing(
 
-    sabre\_dag,
+    sabre_dag,
 
-    neighbor\_table,
+    neighbor_table,
 
-    dist\_matrix,
+    dist_matrix,
 
     heuristic,
 
     ...
 
-    error\_map,
+    error_map,
 
 )
 ```
