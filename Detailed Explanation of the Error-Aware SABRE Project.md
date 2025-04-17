@@ -57,20 +57,22 @@ This document explains precisely **what** is being done to enhance SABRE with ha
 ●       **Extracting Error Data**: `_get_error_map(backend)` determines if the backend is real or fake.
 
 **Passing to Rust**:
-
-  ```neighbor\_table \= NeighborTable(
+```
+  neighbor\_table \= NeighborTable(
 
     rx.adjacency\_matrix(coupling\_map.graph),
 
     error\_map=error\_map
 
-)```
+)
+```
 
 ●        
 
 **Heuristic & Layout**:
 
-  ```(initial\_layout, final\_permutation, sabre\_result) \= sabre\_layout\_and\_routing(
+  ```
+(initial\_layout, final\_permutation, sabre\_result) \= sabre\_layout\_and\_routing(
 
     sabre\_dag,
 
@@ -84,7 +86,8 @@ This document explains precisely **what** is being done to enhance SABRE with ha
 
     error\_map,
 
-)```
+)
+```
 
 ●        
 
