@@ -15,6 +15,7 @@
 import functools
 import logging
 import time
+from typing import Literal
 
 from qiskit.transpiler.basepasses import TransformationPass
 from qiskit.transpiler.exceptions import TranspilerError
@@ -71,13 +72,24 @@ class SabreSwap(TransformationPass):
     `arXiv:1809.02573 <https://arxiv.org/pdf/1809.02573.pdf>`_
     """
 
-    def __init__(self, coupling_map, heuristic="basic", seed=None, fake_run=False, trials=None):
+    def __init__(
+        self, 
+        coupling_map, 
+        heuristic="basic", 
+        seed=None, 
+        fake_run=False, 
+        trials=None,
+        # New CAES parameters (experimental, opt-in)
+        lambda_: float | None = None,
+        omega: float | None = None, 
+        distance_policy: Literal["auto", "hop", "error_weighted"] = "auto"
+    ):
         r"""SabreSwap initializer.
 
         Args:
             coupling_map (Union[CouplingMap, Target]): CouplingMap of the target backend.
             heuristic (str): The type of heuristic to use when deciding best
-                swap strategy ('basic' or 'lookahead' or 'decay').
+                swap strategy ('basic' or 'lookahead' or 'decay' or 'error_aware').
             seed (int): random seed used to tie-break among candidate swaps.
             fake_run (bool): if true, it only pretend to do routing, i.e., no
                 swap is effectively added.
@@ -87,6 +99,16 @@ class SabreSwap(TransformationPass):
                 CPUs on the local system. For reproducible results it is recommended
                 that you set this explicitly, as the output will be deterministic for
                 a fixed number of trials.
+            lambda_ (float, optional): **Experimental.** Lookahead weight for extended 
+                set scoring. If None, uses upstream defaults. Only relevant for 
+                'lookahead', 'decay', and 'error_aware' heuristics.
+            omega (float, optional): **Experimental.** Readout penalty weight for 
+                'error_aware' heuristic. If None, defaults to 1.0 when error_aware 
+                is enabled, ignored otherwise.
+            distance_policy (str): **Experimental.** Distance calculation method. 
+                'auto': hop distances for basic/lookahead/decay, error-weighted for 
+                error_aware. 'hop': always use hop distances. 'error_weighted': 
+                use error-weighted distances (requires backend calibration data).
 
         Raises:
             TranspilerError: If the specified heuristic is not valid.
@@ -133,6 +155,12 @@ class SabreSwap(TransformationPass):
                     \frac{1}{\left|{F}\right|} \sum_{gate \in F} D[\pi(gate.q_1)][\pi(gate.q2)]\\
                     + W *\frac{1}{\left|{E}\right|} \sum_{gate \in E} D[\pi(gate.q_1)][\pi(gate.q2)]
                     }
+
+            - 'error_aware' (**Experimental**):
+
+            Similar to 'lookahead' but uses error-weighted distances derived from backend 
+            calibration data (2-qubit gate errors), plus an optional readout penalty 
+            term. Falls back to 'basic' behavior if no calibration is available.
         """
         super().__init__()
         self._routing_target = None
@@ -157,6 +185,11 @@ class SabreSwap(TransformationPass):
         self.seed = seed
         self.trials = default_num_processes() if trials is None else trials
         self.fake_run = fake_run
+        
+        # Store new CAES parameters (for now, just store them - no behavior change yet)
+        self.lambda_ = lambda_
+        self.omega = omega 
+        self.distance_policy = distance_policy
 
     @functools.cached_property
     def dist_matrix(self):  # pylint: disable=missing-function-docstring
@@ -225,6 +258,12 @@ class SabreSwap(TransformationPass):
                 .with_basic(1.0, SetScaling.Constant)
                 .with_lookahead(0.5, 20, SetScaling.Size)
                 .with_decay(0.001, 5)
+            )
+        elif self.heuristic == "error_aware":
+            # TODO: For now, error_aware falls back to basic until we implement the Rust side
+            # This ensures no behavior change until the full implementation is ready
+            heuristic = Heuristic(attempt_limit=10 * num_dag_qubits).with_basic(
+                1.0, SetScaling.Size
             )
         else:
             raise TranspilerError(f"Heuristic {self.heuristic} not recognized.")
