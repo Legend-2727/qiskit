@@ -11,7 +11,7 @@
 // that they have been altered from the originals.
 
 use std::cmp::Ordering;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::num::NonZero;
 
@@ -45,7 +45,7 @@ use crate::target::{Target, TargetCouplingError};
 
 use super::dag::{InteractionKind, SabreDAG};
 use super::distance::distance_matrix;
-use super::heuristic::{BasicHeuristic, DecayHeuristic, Heuristic, LookaheadHeuristic, SetScaling};
+use super::heuristic::{BasicHeuristic, DecayHeuristic, ErrorAwareHeuristic, Heuristic, LookaheadHeuristic, SetScaling};
 use super::layer::{ExtendedSet, FrontLayer};
 use super::neighbors::Neighbors;
 
@@ -399,11 +399,26 @@ pub struct RoutingProblem<'a> {
     pub sabre: &'a SabreDAG,
     pub dag: &'a DAGCircuit,
     pub heuristic: &'a Heuristic,
+    /// Edge error rates for CAES routing (if available)
+    pub edge_errors: Option<&'a HashMap<(usize, usize), f64>>,
+    /// Readout error rates for CAES routing (if available)  
+    pub readout_errors: Option<&'a HashMap<usize, f64>>,
 }
 impl<'a> RoutingProblem<'a> {
     /// The same problem, but using a different [SabreDAG] representation.
     pub fn with_sabre(mut self, sabre: &'a SabreDAG) -> Self {
         self.sabre = sabre;
+        self
+    }
+    
+    /// The same problem, but with error maps for CAES routing.
+    pub fn with_error_maps(
+        mut self, 
+        edge_errors: Option<&'a HashMap<(usize, usize), f64>>,
+        readout_errors: Option<&'a HashMap<usize, f64>>
+    ) -> Self {
+        self.edge_errors = edge_errors;
+        self.readout_errors = readout_errors;
         self
     }
 }
@@ -423,6 +438,10 @@ struct RoutingState<'a> {
     order: Vec<RoutedItem>,
     control_flow: Vec<RoutingResult<'a>>,
     decay: Vec<f64>,
+    /// Edge error rates for CAES routing (if available)
+    edge_errors: Option<&'a HashMap<(usize, usize), f64>>,
+    /// Readout error rates for CAES routing (if available)  
+    readout_errors: Option<&'a HashMap<usize, f64>>,
     /// How many predecessors still need to be satisfied for each node index before it is at the
     /// front of the topological iteration through the nodes as they're routed.
     required_predecessors: Vec<u32>,
@@ -444,6 +463,8 @@ impl<'a> RoutingState<'a> {
             sabre: self.sabre,
             dag: self.dag,
             heuristic: self.heuristic,
+            edge_errors: None,
+            readout_errors: None,
         }
     }
 
@@ -765,6 +786,38 @@ impl<'a> RoutingState<'a> {
             }
         }
 
+        // Error-aware scoring (CAES) - applies error weighting and readout penalty
+        if let Some(ErrorAwareHeuristic { weight, lambda, omega }) = self.heuristic.error_aware {
+            if let Some(edge_errors) = self.edge_errors {
+                // Apply error-weighted distance calculations
+                for (swap, score) in self.swap_scores.iter_mut() {
+                    let [q1, q2] = *swap;
+                    let edge_key = if q1.index() < q2.index() { 
+                        (q1.index(), q2.index()) 
+                    } else { 
+                        (q2.index(), q1.index()) 
+                    };
+                    
+                    if let Some(&error_rate) = edge_errors.get(&edge_key) {
+                        let error_penalty = weight * lambda * error_rate;
+                        *score += error_penalty;
+                    }
+                }
+            }
+            
+            // Apply readout error penalty if available
+            if let Some(readout_errors) = self.readout_errors {
+                for (swap, score) in self.swap_scores.iter_mut() {
+                    let [q1, q2] = *swap;
+                    let readout_penalty = weight * omega * (
+                        readout_errors.get(&q1.index()).unwrap_or(&0.0) +
+                        readout_errors.get(&q2.index()).unwrap_or(&0.0)
+                    );
+                    *score += readout_penalty;
+                }
+            }
+        }
+
         let mut min_score = f64::INFINITY;
         let epsilon = self.heuristic.best_epsilon;
         for &(swap, score) in self.swap_scores.iter() {
@@ -807,6 +860,8 @@ pub fn sabre_routing(
             sabre: &sabre,
             dag,
             heuristic,
+            edge_errors: None,
+            readout_errors: None,
         },
         initial_layout,
         seed,
@@ -856,6 +911,8 @@ pub fn swap_map_trial<'a>(
         sabre,
         dag,
         heuristic,
+        edge_errors,
+        readout_errors,
     } = problem;
     let num_qubits: u32 = target.num_qubits().try_into().unwrap();
     let mut state = RoutingState {
@@ -874,6 +931,8 @@ pub fn swap_map_trial<'a>(
         best_swaps: Vec::new(),
         rng: Pcg64Mcg::seed_from_u64(seed),
         seed,
+        edge_errors,
+        readout_errors,
     };
     for node in state.sabre.dag.node_indices() {
         for edge in state.sabre.dag.edges(node) {

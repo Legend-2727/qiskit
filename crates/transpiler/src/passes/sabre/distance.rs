@@ -14,6 +14,7 @@ use fixedbitset::FixedBitSet;
 use ndarray::{Array2, ArrayViewMut1, Axis};
 use rayon_cond::CondIterator;
 use rustworkx_core::petgraph::visit::{IntoNeighbors, NodeCompactIndexable};
+use std::collections::HashMap;
 
 // The implementation of `distance_matrix` was forked from Rustworkx at its commit 30f29079eeae,
 // from the file `src/shortest_path/distance_matrix.rs` (as `compute_distance_matrix`). Its licence
@@ -68,6 +69,74 @@ where
             ::std::mem::swap(&mut cur, &mut next);
         }
     };
+    let mut out = Array2::from_elem((n, n), null_value);
+    CondIterator::new(out.axis_iter_mut(Axis(0)), n >= parallel_threshold)
+        .enumerate()
+        .for_each(|(index, row)| bfs_traversal(index, row));
+    out
+}
+
+/// Calculate error-weighted distance matrix using edge errors from calibration data.
+/// This implements the CAES (Calibration-Aware Error-weighted SABRE) distance calculation.
+/// 
+/// Args:
+///     graph: The coupling graph structure
+///     parallel_threshold: Threshold for parallel computation
+///     null_value: Value to use for disconnected nodes
+///     edge_errors: Map from (node1, node2) tuples to error rates
+///     lambda: Error weighting parameter (higher values increase error penalty)
+/// 
+/// Returns:
+///     Distance matrix where distances are weighted by edge error rates
+pub fn error_weighted_distance_matrix<G>(
+    graph: G,
+    parallel_threshold: usize,
+    null_value: f64,
+    edge_errors: &HashMap<(usize, usize), f64>,
+    lambda: f64,
+) -> Array2<f64>
+where
+    G: NodeCompactIndexable + IntoNeighbors,
+{
+    let n = graph.node_count();
+    let neighbors = (0..n)
+        .map(|index| {
+            graph
+                .neighbors(graph.from_index(index))
+                .map(|neighbor| graph.to_index(neighbor))
+                .collect::<FixedBitSet>()
+        })
+        .collect::<Vec<_>>();
+
+    let bfs_traversal = |start: usize, mut row: ArrayViewMut1<f64>| {
+        let mut distance = vec![f64::INFINITY; n];
+        let mut seen = FixedBitSet::with_capacity(n);
+        let mut queue = std::collections::VecDeque::new();
+        
+        distance[start] = 0.0;
+        queue.push_back(start);
+        seen.put(start);
+        
+        while let Some(current) = queue.pop_front() {
+            for next in neighbors[current].ones() {
+                if !seen[next] {
+                    // Calculate error-weighted distance
+                    let edge_key = if current < next { (current, next) } else { (next, current) };
+                    let error_rate = edge_errors.get(&edge_key).unwrap_or(&0.01); // Default small error
+                    let error_weight = 1.0 + lambda * error_rate;
+                    
+                    distance[next] = distance[current] + error_weight;
+                    seen.put(next);
+                    queue.push_back(next);
+                }
+            }
+        }
+        
+        for (i, &dist) in distance.iter().enumerate() {
+            row[[i]] = if dist == f64::INFINITY { null_value } else { dist };
+        }
+    };
+    
     let mut out = Array2::from_elem((n, n), null_value);
     CondIterator::new(out.axis_iter_mut(Axis(0)), n >= parallel_threshold)
         .enumerate()

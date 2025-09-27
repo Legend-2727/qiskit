@@ -160,6 +160,48 @@ impl DecayHeuristic {
     }
 }
 
+/// Define the characteristics of the "error_aware" heuristic (CAES).  This uses error-weighted
+/// distances based on calibration data from the Target to guide swap selection toward lower
+/// error paths. This is a **experimental** feature that adds error-aware routing capabilities.
+#[pyclass]
+#[pyo3(module = "qiskit._accelerate.sabre", frozen)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ErrorAwareHeuristic {
+    /// The relative weight of this heuristic.  Typically defined relative to BasicHeuristic.
+    pub weight: f64,
+    /// Lambda parameter for controlling error weight emphasis.
+    pub lambda: f64,
+    /// Omega parameter for readout error penalty weight.
+    pub omega: f64,
+}
+impl_intopyobject_for_copy_pyclass!(ErrorAwareHeuristic);
+#[pymethods]
+impl ErrorAwareHeuristic {
+    #[new]
+    pub fn new(weight: f64, lambda: f64, omega: f64) -> Self {
+        Self { weight, lambda, omega }
+    }
+
+    pub fn __getnewargs__(&self, py: Python) -> PyResult<Py<PyAny>> {
+        (self.weight, self.lambda, self.omega).into_py_any(py)
+    }
+
+    pub fn __eq__(&self, py: Python, other: Py<PyAny>) -> bool {
+        if let Ok(other) = other.extract::<Self>(py) {
+            self == &other
+        } else {
+            false
+        }
+    }
+
+    pub fn __repr__(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let fmt = "ErrorAwareHeuristic(weight={!r}, lambda={!r}, omega={!r})";
+        PyString::new(py, fmt)
+            .call_method1("format", (self.weight, self.lambda, self.omega))?
+            .into_py_any(py)
+    }
+}
+
 /// A complete description of the heuristic that Sabre will use.  See the individual elements for a
 /// greater description.
 #[pyclass]
@@ -169,6 +211,7 @@ pub struct Heuristic {
     pub basic: Option<BasicHeuristic>,
     pub lookahead: Option<LookaheadHeuristic>,
     pub decay: Option<DecayHeuristic>,
+    pub error_aware: Option<ErrorAwareHeuristic>,
     pub best_epsilon: f64,
     pub attempt_limit: usize,
 }
@@ -189,11 +232,12 @@ impl Heuristic {
     ///     best_epsilon (float): the floating-point epsilon to use when comparing scores to find
     ///         the best value.
     #[new]
-    #[pyo3(signature = (basic=None, lookahead=None, decay=None, attempt_limit=1000, best_epsilon=1e-10))]
+    #[pyo3(signature = (basic=None, lookahead=None, decay=None, error_aware=None, attempt_limit=1000, best_epsilon=1e-10))]
     pub fn new(
         basic: Option<BasicHeuristic>,
         lookahead: Option<LookaheadHeuristic>,
         decay: Option<DecayHeuristic>,
+        error_aware: Option<ErrorAwareHeuristic>,
         attempt_limit: Option<usize>,
         best_epsilon: f64,
     ) -> Self {
@@ -201,6 +245,7 @@ impl Heuristic {
             basic,
             lookahead,
             decay,
+            error_aware,
             best_epsilon,
             attempt_limit: attempt_limit.unwrap_or(usize::MAX),
         }
@@ -211,6 +256,7 @@ impl Heuristic {
             self.basic,
             self.lookahead,
             self.decay,
+            self.error_aware,
             self.attempt_limit,
             self.best_epsilon,
         )
@@ -253,12 +299,21 @@ impl Heuristic {
         }
     }
 
+    /// Set the parameters of the error-aware heuristic (CAES).  This enables error-weighted
+    /// distance calculations based on calibration data.
+    pub fn with_error_aware(&self, weight: f64, lambda: f64, omega: f64) -> Self {
+        Self {
+            error_aware: Some(ErrorAwareHeuristic { weight, lambda, omega }),
+            ..self.clone()
+        }
+    }
+
     pub fn __eq__(&self, py: Python, other: Py<PyAny>) -> bool {
         other.extract::<Self>(py).is_ok_and(|other| self == &other)
     }
 
     pub fn __repr__(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let fmt = "Heuristic(basic={!r}, lookahead={!r}, decay={!r}, attempt_limit={!r}, best_epsilon={!r})";
+        let fmt = "Heuristic(basic={!r}, lookahead={!r}, decay={!r}, error_aware={!r}, attempt_limit={!r}, best_epsilon={!r})";
         PyString::new(py, fmt)
             .call_method1(
                 "format",
@@ -266,6 +321,7 @@ impl Heuristic {
                     self.basic,
                     self.lookahead,
                     self.decay,
+                    self.error_aware,
                     self.attempt_limit,
                     self.best_epsilon,
                 ),

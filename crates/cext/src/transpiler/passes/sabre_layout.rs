@@ -126,6 +126,7 @@ pub unsafe extern "C" fn qk_transpiler_pass_standalone_sabre_layout(
             heuristic::SetScaling::Size,
         )),
         Some(heuristic::DecayHeuristic::new(0.001, 5)),
+        None, // error_aware  
         Some(10 * target.num_qubits.unwrap() as usize),
         1e-10,
     );

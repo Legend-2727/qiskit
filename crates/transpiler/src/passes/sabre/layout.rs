@@ -143,6 +143,8 @@ pub fn sabre_layout_and_routing(
                 sabre: &sabre_full,
                 dag,
                 heuristic,
+                edge_errors: None,
+                readout_errors: None,
             };
             starting_layouts.extend(partial_layouts);
             add_heuristic_layouts(&mut starting_layouts, problem, allow_parallel);
@@ -212,6 +214,8 @@ pub fn sabre_layout_and_routing(
                     sabre: &sabre,
                     dag: &component.sub_dag,
                     heuristic,
+                    edge_errors: None,
+                    readout_errors: None,
                 };
                 for (sub, full) in component.physical_qubits.iter().enumerate() {
                     sub_from_full[full.index()] = PhysicalQubit::new(sub as u32);
@@ -309,6 +313,8 @@ pub fn sabre_layout_and_routing(
                 sabre: &sabre_full,
                 dag,
                 heuristic,
+                edge_errors: None,
+                readout_errors: None,
             };
             let initial_layout =
                 NLayout::from_physical_to_virtual(initial_physical).expect("all indices are valid");
