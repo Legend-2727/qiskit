@@ -127,6 +127,7 @@ pub fn transpile(
         None,
         None,
         None,
+        None, // error_aware
         target.num_qubits.map(|x| (x * 10) as usize),
         1e-10,
     )
