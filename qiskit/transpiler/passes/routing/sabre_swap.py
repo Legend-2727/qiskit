@@ -27,6 +27,7 @@ from qiskit.utils import default_num_processes
 
 from qiskit._accelerate.sabre import sabre_routing, Heuristic, SetScaling, RoutingTarget
 from qiskit._accelerate.nlayout import NLayout
+from ._caes_error_map import extract_error_maps, should_use_error_weighting
 
 LOG = logging.getLogger(__name__)
 
@@ -260,8 +261,23 @@ class SabreSwap(TransformationPass):
                 .with_decay(0.001, 5)
             )
         elif self.heuristic == "error_aware":
-            # TODO: For now, error_aware falls back to basic until we implement the Rust side
-            # This ensures no behavior change until the full implementation is ready
+            # Extract error maps if using error_aware heuristic
+            edge_errors, readout_errors = extract_error_maps(self.target)
+            use_error_weighting = should_use_error_weighting(
+                self.heuristic, self.distance_policy, edge_errors
+            )
+            
+            # Log what we found and what we're using
+            if edge_errors:
+                LOG.debug(f"Found {len(edge_errors)} edge errors for error_aware routing")
+            if readout_errors:
+                LOG.debug(f"Found {len(readout_errors)} readout errors for error_aware routing")
+            if not use_error_weighting:
+                LOG.debug("Falling back to hop distances (no calibration or distance_policy='hop')")
+                
+            # TODO: For now, error_aware still falls back to basic until Rust implementation is ready
+            # This ensures no behavior change until the full implementation is complete
+            # Will be replaced with actual error-aware logic in subsequent commits
             heuristic = Heuristic(attempt_limit=10 * num_dag_qubits).with_basic(
                 1.0, SetScaling.Size
             )
