@@ -1,0 +1,12 @@
+---
+features:
+  - |
+    **Opt-in error-aware SABRE routing**: a new heuristic that uses calibration
+    (Target) 2q error rates as edge weights ``w=-3 ln(1-p)`` and an optional
+    readout penalty ``omega*(r_a+r_b)``. Defaults unchanged; when disabled or
+    when calibration is unavailable, routing exactly matches baseline.
+upgrade:
+  - |
+    No default behavior changes. The feature is gated behind
+    ``heuristic="error_aware"`` in ``SabreSwap`` and falls back to hop-based
+    distances when calibration is missing.
