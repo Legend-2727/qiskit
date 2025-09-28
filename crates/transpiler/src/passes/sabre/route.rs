@@ -44,7 +44,7 @@ use crate::TranspilerError;
 use crate::target::{Target, TargetCouplingError};
 
 use super::dag::{InteractionKind, SabreDAG};
-use super::distance::distance_matrix;
+use super::distance::{distance_matrix, compute_error_weighted_apsp};
 use super::heuristic::{BasicHeuristic, DecayHeuristic, ErrorAwareHeuristic, Heuristic, LookaheadHeuristic, SetScaling};
 use super::layer::{ExtendedSet, FrontLayer};
 use super::neighbors::Neighbors;
@@ -292,13 +292,19 @@ impl RoutingResult<'_> {
 pub struct RoutingTarget {
     pub neighbors: Neighbors,
     pub distance: Array2<f64>,
+    pub error_distance_matrix: Option<Array2<f64>>,
 }
 impl RoutingTarget {
     pub fn from_neighbors(neighbors: Neighbors) -> Self {
         Self {
             distance: distance_matrix(&neighbors, usize::MAX, f64::NAN),
             neighbors,
+            error_distance_matrix: None,
         }
+    }
+
+    pub fn with_error_distance_matrix(&mut self, error_matrix: Array2<f64>) {
+        self.error_distance_matrix = Some(error_matrix);
     }
 
     #[inline]
@@ -786,34 +792,40 @@ impl<'a> RoutingState<'a> {
             }
         }
 
-        // Error-aware scoring (CAES) - applies error weighting and readout penalty
+        // Error-aware scoring (CAES) - uses error-weighted distance matrix
         if let Some(ErrorAwareHeuristic { weight, lambda, omega }) = self.heuristic.error_aware {
-            if let Some(edge_errors) = self.edge_errors {
-                // Apply error-weighted distance calculations
+            // Use error-weighted distances if available, otherwise fall back to hop distances
+            let distance_matrix = if let Some(error_dist) = &self.target.error_distance_matrix {
+                error_dist
+            } else {
+                &self.target.distance
+            };
+            
+            // Recalculate scores using error-weighted distances for front layer
+            absolute_score += weight * self.front_layer.total_score(&distance_matrix.view());
+            for (swap, score) in self.swap_scores.iter_mut() {
+                *score += weight * self.front_layer.score(*swap, &distance_matrix.view());
+            }
+            
+            // Add lambda-weighted extended set contribution if using error-aware distances
+            if self.target.error_distance_matrix.is_some() && lambda > 0.0 {
+                absolute_score += weight * lambda * self.extended_set.total_score(&distance_matrix.view());
                 for (swap, score) in self.swap_scores.iter_mut() {
-                    let [q1, q2] = *swap;
-                    let edge_key = if q1.index() < q2.index() { 
-                        (q1.index(), q2.index()) 
-                    } else { 
-                        (q2.index(), q1.index()) 
-                    };
-                    
-                    if let Some(&error_rate) = edge_errors.get(&edge_key) {
-                        let error_penalty = weight * lambda * error_rate;
-                        *score += error_penalty;
-                    }
+                    *score += weight * lambda * self.extended_set.score(*swap, &distance_matrix.view());
                 }
             }
             
-            // Apply readout error penalty if available
-            if let Some(readout_errors) = self.readout_errors {
-                for (swap, score) in self.swap_scores.iter_mut() {
-                    let [q1, q2] = *swap;
-                    let readout_penalty = weight * omega * (
-                        readout_errors.get(&q1.index()).unwrap_or(&0.0) +
-                        readout_errors.get(&q2.index()).unwrap_or(&0.0)
-                    );
-                    *score += readout_penalty;
+            // Apply readout error penalty if available and omega > 0
+            if omega > 0.0 {
+                if let Some(readout_errors) = self.readout_errors {
+                    for (swap, score) in self.swap_scores.iter_mut() {
+                        let [q1, q2] = *swap;
+                        let readout_penalty = weight * omega * (
+                            readout_errors.get(&q1.index()).unwrap_or(&0.0) +
+                            readout_errors.get(&q2.index()).unwrap_or(&0.0)
+                        );
+                        *score += readout_penalty;
+                    }
                 }
             }
         }

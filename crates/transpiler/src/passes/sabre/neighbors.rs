@@ -157,6 +157,79 @@ impl Neighbors {
         self[left].contains(&right)
     }
 }
+
+/// CAES (Calibration-Aware Error-weighted SABRE) neighbor table with cached distance matrices
+/// and readout penalty support.
+#[derive(Clone, Debug)]
+pub struct CaesNeighbors {
+    neighbors: Neighbors,
+    error_distance_matrix: Option<ndarray::Array2<f64>>,
+    readout_errors: Option<Vec<f64>>,
+}
+
+impl CaesNeighbors {
+    /// Create a new CAES neighbors table from a regular neighbors table.
+    pub fn new(neighbors: Neighbors) -> Self {
+        Self {
+            neighbors,
+            error_distance_matrix: None,
+            readout_errors: None,
+        }
+    }
+
+    /// Cache the error-weighted distance matrix.
+    pub fn cache_error_distance_matrix(&mut self, matrix: ndarray::Array2<f64>) {
+        self.error_distance_matrix = Some(matrix);
+    }
+
+    /// Set the readout error vector.
+    pub fn set_readout_errors(&mut self, readout_errors: Vec<f64>) {
+        self.readout_errors = Some(readout_errors);
+    }
+
+    /// Get the error-weighted distance between two qubits, or None if not cached.
+    pub fn error_distance(&self, from: PhysicalQubit, to: PhysicalQubit) -> Option<f64> {
+        self.error_distance_matrix.as_ref().map(|matrix| {
+            matrix[[from.index(), to.index()]]
+        })
+    }
+
+    /// Calculate readout penalty for a swap operation.
+    /// 
+    /// Args:
+    ///     a: First qubit in swap
+    ///     b: Second qubit in swap
+    ///     omega: Readout penalty weight parameter
+    /// 
+    /// Returns:
+    ///     Readout penalty = omega * (r_a + r_b), or 0.0 if readout errors not available
+    pub fn readout_penalty(&self, a: PhysicalQubit, b: PhysicalQubit, omega: f64) -> f64 {
+        if omega == 0.0 {
+            return 0.0;
+        }
+        
+        self.readout_errors.as_ref().map_or(0.0, |errors| {
+            let r_a = errors.get(a.index()).copied().unwrap_or(0.0);
+            let r_b = errors.get(b.index()).copied().unwrap_or(0.0);
+            omega * (r_a + r_b)
+        })
+    }
+
+    /// Access the underlying neighbors table.
+    pub fn neighbors(&self) -> &Neighbors {
+        &self.neighbors
+    }
+}
+
+// Forward standard operations to the underlying neighbors table
+impl std::ops::Index<PhysicalQubit> for CaesNeighbors {
+    type Output = [PhysicalQubit];
+
+    #[inline]
+    fn index(&self, index: PhysicalQubit) -> &Self::Output {
+        &self.neighbors[index]
+    }
+}
 impl std::ops::Index<PhysicalQubit> for Neighbors {
     type Output = [PhysicalQubit];
 

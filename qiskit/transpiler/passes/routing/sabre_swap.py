@@ -243,6 +243,23 @@ class SabreSwap(TransformationPass):
         # get the algorithm stuck.  See https://github.com/Qiskit/qiskit/pull/14458 for more.
         if isinstance(self.heuristic, Heuristic):
             heuristic = self.heuristic
+            
+            # If the heuristic contains error_aware, we need to extract calibration data
+            heuristic_str = str(heuristic)
+            if "error_aware=" in heuristic_str and "error_aware=None" not in heuristic_str:
+                LOG.debug("Heuristic instance contains error_aware component, extracting calibration data")
+                edge_errors, readout_errors = extract_error_maps(self.target)
+                use_error_weighting = should_use_error_weighting("error_aware", self.distance_policy, edge_errors)
+                
+                # Log calibration data status
+                if edge_errors:
+                    LOG.debug(f"Found {len(edge_errors)} edge errors for error_aware heuristic")
+                if readout_errors:
+                    LOG.debug(f"Found {len(readout_errors)} readout errors for error_aware heuristic")
+                if not use_error_weighting:
+                    LOG.debug("Falling back to hop distances (no calibration or distance_policy='hop')")
+                    
+                LOG.debug(f"Distance policy: {self.distance_policy}, using error weighting: {use_error_weighting}")
         elif self.heuristic == "basic":
             heuristic = Heuristic(attempt_limit=10 * num_dag_qubits).with_basic(
                 1.0, SetScaling.Size
@@ -267,6 +284,11 @@ class SabreSwap(TransformationPass):
                 self.heuristic, self.distance_policy, edge_errors
             )
             
+            # Set default parameters
+            weight = 1.0
+            lambda_param = self.lambda_ if self.lambda_ is not None else 0.5
+            omega_param = self.omega if self.omega is not None else 1.0
+            
             # Log what we found and what we're using
             if edge_errors:
                 LOG.debug(f"Found {len(edge_errors)} edge errors for error_aware routing")
@@ -274,13 +296,16 @@ class SabreSwap(TransformationPass):
                 LOG.debug(f"Found {len(readout_errors)} readout errors for error_aware routing")
             if not use_error_weighting:
                 LOG.debug("Falling back to hop distances (no calibration or distance_policy='hop')")
-                
-            # TODO: For now, error_aware still falls back to basic until Rust implementation is ready
-            # This ensures no behavior change until the full implementation is complete
-            # Will be replaced with actual error-aware logic in subsequent commits
-            heuristic = Heuristic(attempt_limit=10 * num_dag_qubits).with_basic(
-                1.0, SetScaling.Size
+            
+            # Create error-aware heuristic
+            heuristic = (
+                Heuristic(attempt_limit=10 * num_dag_qubits)
+                .with_basic(weight, SetScaling.Constant)
+                .with_error_aware(weight, lambda_param, omega_param)
             )
+            
+            LOG.debug(f"Created error_aware heuristic: weight={weight}, lambda={lambda_param}, omega={omega_param}")
+            LOG.debug(f"Distance policy: {self.distance_policy}, using error weighting: {use_error_weighting}")
         else:
             raise TranspilerError(f"Heuristic {self.heuristic} not recognized.")
         disjoint_utils.require_layout_isolated_to_component(dag, self.target)
